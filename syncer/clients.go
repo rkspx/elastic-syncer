@@ -19,9 +19,11 @@ import (
 const (
 	defaultReadAllInterval = 24 * time.Hour
 	paginateLimit          = 100
+	pointInTimeKeepAlive   = "1m"
 )
 
 var (
+	// ErrNoReadIndex is error returned when trying to read from elasticsearch without specifying any index name.
 	ErrNoReadIndex = errors.New("no read index specified")
 )
 
@@ -96,18 +98,62 @@ func (r *readClient) hasTimestamp(ctx context.Context, index string) (bool, erro
 }
 
 func (r *readClient) createPIT(ctx context.Context, index string) (string, error) {
-	// TODO: add implementation
-	panic("not implemented")
+	res, err := r.cl.OpenPointInTime([]string{index}, pointInTimeKeepAlive, r.cl.OpenPointInTime.WithContext(ctx))
+	if err != nil {
+		return "", err
+	}
+
+	return util.ParseOpenPIT(res)
+}
+
+func (r *readClient) closePIT(ctx context.Context, pit string) error {
+	res, err := r.cl.ClosePointInTime(r.cl.ClosePointInTime.WithBody(util.PointInTime{ID: pit}))
+	if err != nil {
+		return err
+	}
+
+	return util.ParseClosePIT(res)
 }
 
 func (r *readClient) searchAll(ctx context.Context, req readAllRequest, pit string) ([]Document, error) {
+	body, err := r.searchAllBody(req)
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := r.cl.Search(
+		r.cl.Search.WithIndex(req.index),
+		r.cl.Search.WithBody(body),
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return util.ParseSearch(res)
+}
+
+func (r *readClient) searchAllBody(req readAllRequest) (io.Reader, error) {
 	// TODO: add implementation
 	panic("not implemented")
 }
 
 func (r *readClient) searchAllAfter(ctx context.Context, req readAllRequest, pit string, last SortMetadata) ([]Document, error) {
-	// TODO: add implementation
-	panic("not implemented")
+	body, err := searchAllAfterBody(req, pit, last)
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := r.cl.Search(
+		r.cl.Search.WithIndex(req.index),
+		r.cl.Search.WithBody(body),
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return util.ParseSearch(res)
 }
 
 func (r *readClient) readAllPIT(ctx context.Context, req readAllRequest, onRead func(doc Document)) error {
@@ -172,8 +218,26 @@ func (r *readClient) readAllPaginate(ctx context.Context, req readAllRequest, on
 }
 
 func (r *readClient) searchLimitOffset(ctx context.Context, req readAllRequest, limit, offset int) ([]Document, int, error) {
-	// TODO: add implementation
-	panic("not implemented")
+	body, err := r.searchLimitOffsetBody(req, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	res, err := r.cl.Search(
+		r.cl.Search.WithIndex(req.index),
+		r.cl.Search.WithBody(body),
+	)
+
+	if err != nil {
+		return nil, 0, err
+	}
+
+	meta, err := util.ParseSearchWithMetadata(res)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return meta.Results, meta.Total, nil
 }
 
 func (r *readClient) ReadAll(ctx context.Context, req readAllRequest, onRead func(doc Document)) error {
