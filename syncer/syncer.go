@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/elastic/go-elasticsearch/v7/esutil"
+	util "github.com/rkspx/elastic-syncer/elasticsearch-util"
 )
 
 type Config struct {
@@ -58,14 +59,14 @@ func (c *Client) Sync(ctx context.Context) error {
 		// TODO: add request from config
 	}
 
-	err = c.fromClient.ReadAll(ctx, req, func(doc Document) {
+	err = c.fromClient.ReadAll(ctx, req, func(doc util.Document) {
 		c.toClient.WriteDocument(
 			ctx,
 			doc,
-			func(doc DocumentMetadata) {
+			func(doc util.DocumentMetadata) {
 				log.Printf("done writing document '%s/%s'\n", doc.Index, doc.ID)
 			},
-			func(doc DocumentMetadata, err error) {
+			func(doc util.DocumentMetadata, err error) {
 				log.Printf("failed to write document '%s/%s', %s\n", doc.Index, doc.ID, err.Error())
 			},
 		)
