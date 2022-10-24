@@ -1,7 +1,9 @@
 package syncer
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -115,8 +117,8 @@ func (r *readClient) closePIT(ctx context.Context, pit string) error {
 	return util.ParseClosePIT(res)
 }
 
-func (r *readClient) searchAll(ctx context.Context, req readAllRequest, pit string) ([]Document, error) {
-	body, err := r.searchAllBody(req)
+func (r *readClient) searchAll(ctx context.Context, req readAllRequest, pit string) ([]util.Document, error) {
+	body, err := r.searchAllBody(req, pit)
 	if err != nil {
 		return nil, err
 	}
@@ -133,13 +135,49 @@ func (r *readClient) searchAll(ctx context.Context, req readAllRequest, pit stri
 	return util.ParseSearch(res)
 }
 
-func (r *readClient) searchAllBody(req readAllRequest) (io.Reader, error) {
-	// TODO: add implementation
-	panic("not implemented")
+func (r *readClient) searchAllBody(req readAllRequest, pit string) (io.Reader, error) {
+	filters := []map[string]any{}
+	if req.from != 0 && req.to != 0 {
+		filters = append(filters, map[string]any{
+			"range": map[string]any{
+				"timestamp": map[string]any{
+					"gte":    req.from,
+					"lte":    req.to,
+					"format": "epoch_millis",
+				},
+			},
+		})
+	}
+
+	query := map[string]any{
+		"query": map[string]any{
+			"bool": map[string]any{
+				"must": map[string]any{
+					"match_all": map[string]string{},
+				},
+				"filters": filters,
+			},
+		},
+		"pit": map[string]string{
+			"id":         pit,
+			"keep_alive": pointInTimeKeepAlive,
+		},
+		"sort": []map[string]string{
+			{"timestamp": "desc"},
+			{"_id": "desc"},
+		},
+	}
+
+	b, err := json.Marshal(query)
+	if err != nil {
+		return nil, err
+	}
+
+	return bytes.NewReader(b), nil
 }
 
-func (r *readClient) searchAllAfter(ctx context.Context, req readAllRequest, pit string, last SortMetadata) ([]Document, error) {
-	body, err := searchAllAfterBody(req, pit, last)
+func (r *readClient) searchAllAfter(ctx context.Context, req readAllRequest, pit string, last util.SortMetadata) ([]util.Document, error) {
+	body, err := r.searchAllAfterBody(req, pit, last)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +194,49 @@ func (r *readClient) searchAllAfter(ctx context.Context, req readAllRequest, pit
 	return util.ParseSearch(res)
 }
 
-func (r *readClient) readAllPIT(ctx context.Context, req readAllRequest, onRead func(doc Document)) error {
+func (r *readClient) searchAllAfterBody(req readAllRequest, pit string, last util.SortMetadata) (io.Reader, error) {
+	filters := []map[string]any{}
+	if req.from != 0 && req.to != 0 {
+		filters = append(filters, map[string]any{
+			"range": map[string]any{
+				"timestamp": map[string]any{
+					"gte":    req.from,
+					"lte":    req.to,
+					"format": "epoch_millis",
+				},
+			},
+		})
+	}
+
+	query := map[string]any{
+		"query": map[string]any{
+			"bool": map[string]any{
+				"must": map[string]any{
+					"match_all": map[string]string{},
+				},
+				"filters": filters,
+			},
+		},
+		"pit": map[string]string{
+			"id":         pit,
+			"keep_alive": pointInTimeKeepAlive,
+		},
+		"search_after": last,
+		"sort": []map[string]string{
+			{"timestamp": "desc"},
+			{"_id": "desc"},
+		},
+	}
+
+	b, err := json.Marshal(query)
+	if err != nil {
+		return nil, err
+	}
+
+	return bytes.NewReader(b), nil
+}
+
+func (r *readClient) readAllPIT(ctx context.Context, req readAllRequest, onRead func(doc util.Document)) error {
 	pit, err := r.createPIT(ctx, req.index)
 	if err != nil {
 		return fmt.Errorf("can not create point-in-time, %s", err.Error())
@@ -177,7 +257,7 @@ func (r *readClient) readAllPIT(ctx context.Context, req readAllRequest, onRead 
 		count = count + len(docs)
 		for _, doc := range docs {
 			r.wg.Add(1)
-			go func(doc Document) {
+			go func(doc util.Document) {
 				defer r.wg.Done()
 				onRead(doc)
 			}(doc)
@@ -189,7 +269,7 @@ func (r *readClient) readAllPIT(ctx context.Context, req readAllRequest, onRead 
 	return nil
 }
 
-func (r *readClient) readAllPaginate(ctx context.Context, req readAllRequest, onRead func(doc Document)) error {
+func (r *readClient) readAllPaginate(ctx context.Context, req readAllRequest, onRead func(doc util.Document)) error {
 	docs, total, err := r.searchLimitOffset(ctx, req, paginateLimit, 0)
 	count, page := 0, 0
 	for len(docs) >= 0 && total != 0 {
@@ -205,7 +285,7 @@ func (r *readClient) readAllPaginate(ctx context.Context, req readAllRequest, on
 		count = count + len(docs)
 		for _, doc := range docs {
 			r.wg.Add(1)
-			go func(doc Document) {
+			go func(doc util.Document) {
 				defer r.wg.Done()
 				onRead(doc)
 			}(doc)
@@ -217,7 +297,7 @@ func (r *readClient) readAllPaginate(ctx context.Context, req readAllRequest, on
 	return nil
 }
 
-func (r *readClient) searchLimitOffset(ctx context.Context, req readAllRequest, limit, offset int) ([]Document, int, error) {
+func (r *readClient) searchLimitOffset(ctx context.Context, req readAllRequest, limit, offset int) ([]util.Document, int, error) {
 	body, err := r.searchLimitOffsetBody(req, limit, offset)
 	if err != nil {
 		return nil, 0, err
@@ -240,7 +320,46 @@ func (r *readClient) searchLimitOffset(ctx context.Context, req readAllRequest, 
 	return meta.Results, meta.Total, nil
 }
 
-func (r *readClient) ReadAll(ctx context.Context, req readAllRequest, onRead func(doc Document)) error {
+func (r *readClient) searchLimitOffsetBody(req readAllRequest, limit int, offset int) (io.Reader, error) {
+	filters := []map[string]any{}
+	if req.from != 0 && req.to != 0 {
+		filters = append(filters, map[string]any{
+			"range": map[string]any{
+				"timestamp": map[string]any{
+					"gte":    req.from,
+					"lte":    req.to,
+					"format": "epoch_millis",
+				},
+			},
+		})
+	}
+
+	query := map[string]any{
+		"from": offset,
+		"size": limit,
+		"query": map[string]any{
+			"bool": map[string]any{
+				"must": map[string]any{
+					"match_all": map[string]string{},
+				},
+				"filters": filters,
+			},
+		},
+		"sort": []map[string]string{
+			{"timestamp": "desc"},
+			{"_id": "desc"},
+		},
+	}
+
+	b, err := json.Marshal(query)
+	if err != nil {
+		return nil, err
+	}
+
+	return bytes.NewReader(b), nil
+}
+
+func (r *readClient) ReadAll(ctx context.Context, req readAllRequest, onRead func(doc util.Document)) error {
 	req.setDefaults()
 	if err := req.validate(); err != nil {
 		return err
@@ -337,7 +456,7 @@ func (c *readWriteClient) IndexExist(ctx context.Context, index string) (bool, e
 			return false, nil
 		}
 
-		return false, parseError(res.Body)
+		return false, util.ParseCommonError(res.Body)
 	}
 
 	return true, nil
@@ -357,7 +476,7 @@ func (c *readWriteClient) CreateIndex(ctx context.Context, setting util.IndexSet
 	return nil
 }
 
-func (c *readWriteClient) WriteDocument(ctx context.Context, doc Document, onSuccess func(DocumentMetadata), onError func(DocumentMetadata, error)) {
+func (c *readWriteClient) WriteDocument(ctx context.Context, doc util.Document, onSuccess func(util.DocumentMetadata), onError func(util.DocumentMetadata, error)) {
 	meta := doc.DocumentMetadata
 	c.wg.Add(1)
 
@@ -388,12 +507,4 @@ func (c *readWriteClient) Flush(ctx context.Context) error {
 
 func (c *readWriteClient) Wait() {
 	c.wg.Wait()
-}
-
-func parseError(res io.Reader) error {
-	// TODO: add implementation
-	// it's not sure how this will be implemented yet, but
-	// the main goal is to return something with proper error
-	// message depending on the error response.
-	panic("not implemented")
 }
