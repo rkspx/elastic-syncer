@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/elastic/go-elasticsearch/v7/esutil"
 )
@@ -25,6 +26,14 @@ func New(cfg Config) (*Client, error) {
 }
 
 func (c *Client) Sync(ctx context.Context) error {
+	defer func() {
+		flushContext, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := c.toClient.Flush(flushContext); err != nil {
+			log.Printf("failed to flush: %s\n", err)
+		}
+	}()
+
 	settings, err := c.fromClient.ReadIndexSettings(ctx, c.index)
 	if err != nil {
 		return fmt.Errorf("can not get index settings for '%s', %s", c.index, err.Error())
@@ -45,7 +54,11 @@ func (c *Client) Sync(ctx context.Context) error {
 		}
 	}
 
-	err = c.fromClient.ReadAll(ctx, c.index, func(doc Document) {
+	req := readAllRequest{
+		// TODO: add request from config
+	}
+
+	err = c.fromClient.ReadAll(ctx, req, func(doc Document) {
 		c.toClient.WriteDocument(
 			ctx,
 			doc,

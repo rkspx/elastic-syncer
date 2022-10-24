@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,8 +16,46 @@ import (
 	util "github.com/rkspx/elastic-syncer/elasticsearch-util"
 )
 
+const (
+	defaultReadAllInterval = 24 * time.Hour
+	paginateLimit          = 100
+)
+
+var (
+	ErrNoReadIndex = errors.New("no read index specified")
+)
+
+type readAllRequest struct {
+	from  int64
+	to    int64
+	limit int
+	index string
+}
+
+func (r readAllRequest) validate() error {
+	if r.index == "" {
+		return ErrNoReadIndex
+	}
+
+	return nil
+}
+
+func (r *readAllRequest) setDefaults() {
+	if r.limit == 0 {
+		now := time.Now().UTC()
+		if r.to == 0 {
+			r.to = now.UnixMilli()
+		}
+
+		if r.from == 0 {
+			r.from = now.Add(-defaultReadAllInterval).UnixMilli()
+		}
+	}
+}
+
 type readClient struct {
 	cl *elasticsearch.Client
+	wg sync.WaitGroup
 }
 
 func (r *readClient) ReadIndexSettings(ctx context.Context, index string) ([]util.IndexSetting, error) {
@@ -34,10 +73,105 @@ func (r *readClient) ReadIndexSettings(ctx context.Context, index string) ([]uti
 	return settings, nil
 }
 
-func (r *readClient) ReadAll(ctx context.Context, index string, onRead func(doc Document)) error {
+func (r *readClient) hasTimestamp(ctx context.Context, index string) (bool, error) {
+	settings, err := r.ReadIndexSettings(ctx, index)
+	if err != nil {
+		return false, err
+	}
+
+	for _, setting := range settings {
+		if setting.Index == index {
+			m, ok := setting.Setting.Mappings.Properties["timestamp"]
+			if !ok {
+				return false, nil
+			}
+
+			if m.Type == "date" {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
+}
+
+func (r *readClient) createPIT(ctx context.Context, index string) (string, error) {
+	// TODO: add implementation
+	panic("not implemented")
+}
+
+func (r *readClient) searchAll(ctx context.Context, req readAllRequest, pit string) ([]Document, error) {
+	// TODO: add implementation
+	panic("not implemented")
+}
+
+func (r *readClient) searchAllAfter(ctx context.Context, req readAllRequest, pit string, last SortMetadata) ([]Document, error) {
+	// TODO: add implementation
+	panic("not implemented")
+}
+
+func (r *readClient) readAllPIT(ctx context.Context, req readAllRequest, onRead func(doc Document)) error {
+	pit, err := r.createPIT(ctx, req.index)
+	if err != nil {
+		return fmt.Errorf("can not create point-in-time, %s", err.Error())
+	}
+
+	docs, err := r.searchAll(ctx, req, pit)
+	for len(docs) >= 0 {
+		if err != nil {
+			return fmt.Errorf("can not read all, %s", err.Error())
+		}
+
+		for _, doc := range docs {
+			r.wg.Add(1)
+			go func(doc Document) {
+				defer r.wg.Done()
+				onRead(doc)
+			}(doc)
+		}
+
+		docs, err = r.searchAllAfter(ctx, req, pit, docs[len(docs)-1].SortMetadata)
+	}
+
+	return nil
+}
+
+func (r *readClient) readAllPaginate(ctx context.Context, req readAllRequest, onRead func(doc Document)) error {
+	docs, total, err := r.searchLimitOffset(ctx, req, paginateLimit, 0)
+	page := 0
+	for len(docs) >= 0 && total != 0 {
+		if err != nil {
+			return fmt.Errorf("can not read paginate, %s", err.Error())
+		}
+
+		for _, doc := range docs {
+			r.wg.Add(1)
+			go func(doc Document) {
+				defer r.wg.Done()
+				onRead(doc)
+			}(doc)
+		}
+
+		docs, total, err = r.searchLimitOffset(ctx, req, paginateLimit, page*paginateLimit)
+	}
+
+	return nil
+}
+
+func (r *readClient) searchLimitOffset(ctx context.Context, req readAllRequest, limit, offset int) ([]Document, int, error) {
+	// TODO: add implementation
+	panic("not implemented")
+}
+
+func (r *readClient) ReadAll(ctx context.Context, req readAllRequest, onRead func(doc Document)) error {
+	req.setDefaults()
+	if err := req.validate(); err != nil {
+		return err
+	}
+
 	// TODO: add implementation
 	// check if the index mappings contain `timestamp` field with datetime field type.
-	//
+
 	// If it does, create a point-in-time for the index, and do match_all query with sort
 	// on field `timestamp` and `_id` descendingly, passing the point-in-time id along the query.
 	// it then do a search_after query, passing the point-in-time id, the last result's timestamp and _id
@@ -48,7 +182,17 @@ func (r *readClient) ReadAll(ctx context.Context, index string, onRead func(doc 
 
 	// If it doesn't, do a simple pagination using from and to search parameter, note that
 	// the result could be inconsistent if a referesh happen during the pagination query.
-	panic("not implemented")
+
+	ok, err := r.hasTimestamp(ctx, req.index)
+	if err != nil {
+		return err
+	}
+
+	if ok {
+		return r.readAllPIT(ctx, req, onRead)
+	}
+
+	return r.readAllPaginate(ctx, req, onRead)
 }
 
 type readWriteClientConfig struct {
