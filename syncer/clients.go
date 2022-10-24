@@ -2,38 +2,36 @@ package syncer
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
+	"sync"
+	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/elastic/go-elasticsearch/v7"
-	"github.com/elastic/go-elasticsearch/v7/esapi"
+	"github.com/elastic/go-elasticsearch/v7/esutil"
+
+	util "github.com/rkspx/elastic-syncer/elasticsearch-util"
 )
 
 type readClient struct {
 	cl *elasticsearch.Client
 }
 
-func (r *readClient) ReadIndexSettings(ctx context.Context, index string) ([]IndexSetting, error) {
+func (r *readClient) ReadIndexSettings(ctx context.Context, index string) ([]util.IndexSetting, error) {
 	res, err := r.cl.Indices.Get([]string{index}, r.cl.Indices.Get.WithContext(ctx))
 	if err != nil {
 		return nil, err
 	}
 
 	defer res.Body.Close()
-	settings, err := parseGetIndexSettings(res)
+	settings, err := util.ParseIndicesGetResponse(res)
 	if err != nil {
 		return nil, err
 	}
 
 	return settings, nil
-}
-
-func parseGetIndexSettings(res *esapi.Response) ([]IndexSetting, error) {
-	// TODO: add implementation, parses the *esapi.Response, defer closing its body,
-	// check wether the status code indicates an error, if it is, parse the error, and return
-	// it as an `error`. Otherwise, parse the response into []IndexSetting, and return it
-	// with nil error.
-	panic("not implemented")
 }
 
 func (r *readClient) ReadAll(ctx context.Context, index string, onRead func(doc Document)) error {
@@ -53,8 +51,56 @@ func (r *readClient) ReadAll(ctx context.Context, index string, onRead func(doc 
 	panic("not implemented")
 }
 
+type readWriteClientConfig struct {
+	host          string
+	username      string
+	password      string
+	workerNumber  int
+	flushBytes    int
+	flushInterval time.Duration
+}
+
+func newReadWriteClient(cfg readWriteClientConfig) (*readWriteClient, error) {
+	retryBackoff := backoff.NewExponentialBackOff()
+	es, err := elasticsearch.NewClient(elasticsearch.Config{
+		Addresses:     []string{cfg.host},
+		Username:      cfg.username,
+		Password:      cfg.password,
+		RetryOnStatus: []int{502, 503, 504, 429},
+		RetryBackoff: func(attempt int) time.Duration {
+			if attempt == 1 {
+				retryBackoff.Reset()
+			}
+
+			return retryBackoff.NextBackOff()
+		},
+		MaxRetries: 5,
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("error creating elasticsearch client, %s", err.Error())
+	}
+
+	bi, err := esutil.NewBulkIndexer(esutil.BulkIndexerConfig{
+		Client:        es,
+		NumWorkers:    cfg.workerNumber,
+		FlushBytes:    cfg.flushBytes,
+		FlushInterval: cfg.flushInterval,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("error creating indexer, %s", err.Error())
+	}
+
+	return &readWriteClient{
+		cl: es,
+		bi: bi,
+	}, nil
+}
+
 type readWriteClient struct {
 	cl *elasticsearch.Client
+	bi esutil.BulkIndexer
+	wg sync.WaitGroup
 }
 
 func (c *readWriteClient) IndexExist(ctx context.Context, index string) (bool, error) {
@@ -76,19 +122,51 @@ func (c *readWriteClient) IndexExist(ctx context.Context, index string) (bool, e
 	return true, nil
 }
 
-func (c *readWriteClient) CreateIndex(ctx context.Context, setting IndexSetting) error {
-	// TODO: add implementation
-	panic("not implemented")
+func (c *readWriteClient) CreateIndex(ctx context.Context, setting util.IndexSetting) error {
+	res, err := c.cl.Indices.Create(setting.Index, c.cl.Indices.Create.WithBody(setting))
+	if err != nil {
+		return err
+	}
+
+	_, err = util.ParseCreateIndexResponse(res)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
-func (c *readWriteClient) WriteDocument(ctx context.Context, index, id string, source []byte, onSuccess func(Document), onError func(Document, error)) {
-	// TODO: add implementation
-	panic("not implemented")
+func (c *readWriteClient) WriteDocument(ctx context.Context, doc Document, onSuccess func(DocumentMetadata), onError func(DocumentMetadata, error)) {
+	meta := doc.DocumentMetadata
+	c.wg.Add(1)
+
+	err := c.bi.Add(ctx, esutil.BulkIndexerItem{
+		Action:     "index",
+		DocumentID: doc.ID,
+		Index:      doc.Index,
+		Body:       doc,
+		OnSuccess: func(ctx context.Context, item esutil.BulkIndexerItem, res esutil.BulkIndexerResponseItem) {
+			defer c.wg.Done()
+			onSuccess(meta)
+		},
+		OnFailure: func(ctx context.Context, item esutil.BulkIndexerItem, res esutil.BulkIndexerResponseItem, err error) {
+			defer c.wg.Done()
+			onError(meta, err)
+		},
+	})
+
+	if err != nil {
+		c.wg.Done()
+		onError(meta, err)
+	}
+}
+
+func (c *readWriteClient) Flush(ctx context.Context) error {
+	return c.bi.Close(ctx)
 }
 
 func (c *readWriteClient) Wait() {
-	// TODO: add implementation
-	panic("not implemented")
+	c.wg.Wait()
 }
 
 func parseError(res io.Reader) error {
