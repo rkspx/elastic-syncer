@@ -48,13 +48,11 @@ func (c *Client) Sync(ctx context.Context) error {
 	err = c.fromClient.ReadAll(ctx, c.index, func(doc Document) {
 		c.toClient.WriteDocument(
 			ctx,
-			doc.Index,
-			doc.ID,
-			doc.Source,
-			func(doc Document) {
+			doc,
+			func(doc DocumentMetadata) {
 				log.Printf("done writing document '%s/%s'\n", doc.Index, doc.ID)
 			},
-			func(doc Document, err error) {
+			func(doc DocumentMetadata, err error) {
 				log.Printf("failed to write document '%s/%s', %s\n", doc.Index, doc.ID, err.Error())
 			},
 		)

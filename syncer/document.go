@@ -1,39 +1,31 @@
 package syncer
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+)
 
 type Document struct {
-	Index  string          `json:"_index"`
-	ID     string          `json:"_id"`
+	DocumentMetadata
 	Source json.RawMessage `json:"_source"`
+
+	r *bytes.Reader
 }
 
-type IndexSetting struct {
-	Index   string
-	Setting SettingInner
+type DocumentMetadata struct {
+	Index string `json:"_index"`
+	ID    string `json:"_id"`
 }
 
-type SettingInner struct {
-	Aliases  Aliases  `json:"aliases"`
-	Mappings Mappings `json:"mappings"`
-	Settings Settings `json:"settings"`
-}
+func (d Document) Read(p []byte) (int, error) {
+	if d.r == nil {
+		b, err := json.Marshal(d.Source)
+		if err != nil {
+			return 0, err
+		}
 
-type Aliases = map[string]any
+		d.r = bytes.NewReader(b)
+	}
 
-type Mappings struct {
-	Properties map[string]struct {
-		Type   string `json:"type"`
-		Fields struct {
-			Keyword struct {
-				Type        string `json:"keyword"`
-				IgnoreAbove int    `json:"ignore_above"`
-			} `json:"keyword,omitempty"`
-		} `json:"fields"`
-	} `json:"properties"`
-}
-
-type Settings struct {
-	NumberOfShards   string `json:"number_of_shards"`
-	NumberOfReplicas string `json:"number_of_replicas"`
+	return d.r.Read(p)
 }
