@@ -117,11 +117,18 @@ func (r *readClient) readAllPIT(ctx context.Context, req readAllRequest, onRead 
 	}
 
 	docs, err := r.searchAll(ctx, req, pit)
+	count := 0
 	for len(docs) >= 0 {
+		// return early if limit is reached.
+		if req.limit != 0 && count >= req.limit {
+			return nil
+		}
+
 		if err != nil {
 			return fmt.Errorf("can not read all, %s", err.Error())
 		}
 
+		count = count + len(docs)
 		for _, doc := range docs {
 			r.wg.Add(1)
 			go func(doc Document) {
@@ -138,12 +145,18 @@ func (r *readClient) readAllPIT(ctx context.Context, req readAllRequest, onRead 
 
 func (r *readClient) readAllPaginate(ctx context.Context, req readAllRequest, onRead func(doc Document)) error {
 	docs, total, err := r.searchLimitOffset(ctx, req, paginateLimit, 0)
-	page := 0
+	count, page := 0, 0
 	for len(docs) >= 0 && total != 0 {
+		// return early if limit is reached.
+		if req.limit != 0 && count >= req.limit {
+			return nil
+		}
+
 		if err != nil {
 			return fmt.Errorf("can not read paginate, %s", err.Error())
 		}
 
+		count = count + len(docs)
 		for _, doc := range docs {
 			r.wg.Add(1)
 			go func(doc Document) {
