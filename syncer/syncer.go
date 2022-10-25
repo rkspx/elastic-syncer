@@ -9,9 +9,14 @@ import (
 	util "github.com/rkspx/elastic-syncer/elasticsearch-util"
 )
 
+const (
+	DefaultSince = 30 * 24 * time.Hour // 30 days
+	DefaultLimit = 0
+	DefaultIndex = ""
+)
+
 type Config struct {
-	From  time.Time
-	To    time.Time
+	Since time.Duration
 	Limit int
 	Index string
 
@@ -54,12 +59,15 @@ func New(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("failed to create to client, %s", err.Error())
 	}
 
+	now := time.Now().UTC()
+	from, to := now.Add(-cfg.Since), now
+
 	cl := &Client{
 		fromClient: fromClient,
 		toClient:   toClient,
 		index:      cfg.Index,
-		from:       cfg.From,
-		to:         cfg.To,
+		from:       from,
+		to:         to,
 		limit:      cfg.Limit,
 	}
 
