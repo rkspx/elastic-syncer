@@ -20,4 +20,4 @@ cgoflag=${3}
 
 echo "building ${cmd} to ${out} with os ${os}, architecture ${arch}, cgo-flag ${cgoflag}, build-time ${now}, and version ${ver}"
 
-CGO_ENABLED=${cgoflag} GOOS=${os} GOARCH=${arch} go build -a -ldflags "-s -w -X main.version=${ver} -X main.buildtime=${now} -extldflags '-static'" -o bin/server ${cmd}
+CGO_ENABLED=${cgoflag} GOOS=${os} GOARCH=${arch} go build -a -ldflags "-s -w -X main.version=${ver} -X main.buildtime=${now} -extldflags '-static'" -o ${out} ${cmd}
