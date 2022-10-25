@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"runtime"
 	"sync"
 	"time"
 
@@ -55,6 +56,36 @@ func (r *readAllRequest) setDefaults() {
 			r.from = now.Add(-defaultReadAllInterval)
 		}
 	}
+}
+
+type readClientConfig struct {
+	address  string
+	username string
+	password string
+}
+
+func (r readClientConfig) validate() error {
+	if r.address == "" {
+		return ErrNoHost
+	}
+
+	return nil
+}
+
+func newReadClient(cfg readClientConfig) (*readClient, error) {
+	cl, err := elasticsearch.NewClient(elasticsearch.Config{
+		Addresses: []string{cfg.address},
+		Username:  cfg.username,
+		Password:  cfg.password,
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &readClient{
+		cl: cl,
+	}, nil
 }
 
 type readClient struct {
@@ -391,16 +422,51 @@ func (r *readClient) ReadAll(ctx context.Context, req readAllRequest, onRead fun
 	return r.readAllPaginate(ctx, req, onRead)
 }
 
+var ErrNoHost = errors.New("no elasticsearch host specified")
+
+var (
+	defaultWorkerNumber  = runtime.NumCPU()
+	defaultFlushBytes    = 5e+6
+	defaultFlushInterval = 30 * time.Second
+)
+
 type readWriteClientConfig struct {
 	host          string
 	username      string
 	password      string
 	workerNumber  int
-	flushBytes    int
+	flushBytes    float64
 	flushInterval time.Duration
 }
 
+func (rw *readWriteClientConfig) validate() error {
+	if rw.host != "" {
+		return ErrNoHost
+	}
+
+	return nil
+}
+
+func (rw *readWriteClientConfig) setDefaults() {
+	if rw.workerNumber == 0 {
+		rw.workerNumber = defaultWorkerNumber
+	}
+
+	if rw.flushBytes == 0 {
+		rw.flushBytes = defaultFlushBytes
+	}
+
+	if rw.flushInterval == 0 {
+		rw.flushInterval = defaultFlushInterval
+	}
+}
+
 func newReadWriteClient(cfg readWriteClientConfig) (*readWriteClient, error) {
+	cfg.setDefaults()
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
 	retryBackoff := backoff.NewExponentialBackOff()
 	es, err := elasticsearch.NewClient(elasticsearch.Config{
 		Addresses:     []string{cfg.host},
@@ -424,7 +490,7 @@ func newReadWriteClient(cfg readWriteClientConfig) (*readWriteClient, error) {
 	bi, err := esutil.NewBulkIndexer(esutil.BulkIndexerConfig{
 		Client:        es,
 		NumWorkers:    cfg.workerNumber,
-		FlushBytes:    cfg.flushBytes,
+		FlushBytes:    int(cfg.flushBytes),
 		FlushInterval: cfg.flushInterval,
 	})
 	if err != nil {
