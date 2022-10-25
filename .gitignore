@@ -2,3 +2,4 @@ dev_*
 .vscode
 *.http
 .dccache
+**/bin/**
