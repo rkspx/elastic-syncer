@@ -34,12 +34,13 @@ type SettingInner struct {
 type Aliases = map[string]any
 
 type Mappings struct {
-	Properties map[string]MappingProperty `json:"properties"`
+	Properties map[string]MappingProperty `json:"properties,omitempty"`
 }
 
 type MappingProperty struct {
-	Type   string                              `json:"type"`
-	Fields map[string]MappingPropertyFieldType `json:"fields"`
+	Type       string                              `json:"type,omitempty"`
+	Fields     map[string]MappingPropertyFieldType `json:"fields,omitempty"`
+	Properties map[string]MappingProperty          `json:"properties,omitempty"`
 }
 
 type MappingPropertyFieldType struct {

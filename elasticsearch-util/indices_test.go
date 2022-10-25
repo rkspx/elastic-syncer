@@ -2,6 +2,7 @@ package esutil
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"testing"
 
@@ -106,5 +107,56 @@ func TestParseIndicesGetResponse(t *testing.T) {
 			}
 		}
 
+	}
+}
+
+func TestIndexSettingPropertiesMappingParse(t *testing.T) {
+	for _, c := range []struct {
+		b    []byte
+		prop Mappings
+	}{
+		{
+			b: []byte(`{
+				"properties": {
+					"dst_ips": {
+						"type": "text",
+						"fields": {
+							"keyword": {
+								"type": "keyword",
+								"ignore_above": 256
+							}
+						}
+					},
+				}
+			}`),
+			prop: Mappings{
+				Properties: map[string]MappingProperty{
+					"dst_ips": {
+						Type: "text",
+						Fields: map[string]MappingPropertyFieldType{
+							"keyword": {
+								Type:        "keyword",
+								IgnoreAbove: 256,
+							},
+						},
+					},
+				},
+			},
+		},
+	} {
+		t.Run("test parse property mapping", func(t *testing.T) {
+			var m Mappings
+			if err := json.Unmarshal(c.b, &m); err != nil {
+				t.Fatal(err)
+			}
+
+			compareMapping(t, c.prop, m)
+		})
+	}
+}
+
+func compareMapping(t *testing.T, m1, m2 Mappings) {
+	if len(m1.Properties) != len(m2.Properties) {
+		t.Errorf("expecting %d properties, got %d", len(m1.Properties), len(m2.Properties))
 	}
 }
