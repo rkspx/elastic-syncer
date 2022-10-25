@@ -30,8 +30,8 @@ var (
 )
 
 type readAllRequest struct {
-	from  int64
-	to    int64
+	from  time.Time
+	to    time.Time
 	limit int
 	index string
 }
@@ -47,12 +47,12 @@ func (r readAllRequest) validate() error {
 func (r *readAllRequest) setDefaults() {
 	if r.limit == 0 {
 		now := time.Now().UTC()
-		if r.to == 0 {
-			r.to = now.UnixMilli()
+		if r.to.IsZero() {
+			r.to = now
 		}
 
-		if r.from == 0 {
-			r.from = now.Add(-defaultReadAllInterval).UnixMilli()
+		if r.from.IsZero() {
+			r.from = now.Add(-defaultReadAllInterval)
 		}
 	}
 }
@@ -137,12 +137,12 @@ func (r *readClient) searchAll(ctx context.Context, req readAllRequest, pit stri
 
 func (r *readClient) searchAllBody(req readAllRequest, pit string) (io.Reader, error) {
 	filters := []map[string]any{}
-	if req.from != 0 && req.to != 0 {
+	if req.from.IsZero() && req.to.IsZero() {
 		filters = append(filters, map[string]any{
 			"range": map[string]any{
 				"timestamp": map[string]any{
-					"gte":    req.from,
-					"lte":    req.to,
+					"gte":    req.from.UnixMilli(),
+					"lte":    req.to.UnixMilli(),
 					"format": "epoch_millis",
 				},
 			},
@@ -196,12 +196,12 @@ func (r *readClient) searchAllAfter(ctx context.Context, req readAllRequest, pit
 
 func (r *readClient) searchAllAfterBody(req readAllRequest, pit string, last util.SortMetadata) (io.Reader, error) {
 	filters := []map[string]any{}
-	if req.from != 0 && req.to != 0 {
+	if req.from.IsZero() && req.to.IsZero() {
 		filters = append(filters, map[string]any{
 			"range": map[string]any{
 				"timestamp": map[string]any{
-					"gte":    req.from,
-					"lte":    req.to,
+					"gte":    req.from.UnixMilli(),
+					"lte":    req.to.UnixMilli(),
 					"format": "epoch_millis",
 				},
 			},
@@ -322,12 +322,12 @@ func (r *readClient) searchLimitOffset(ctx context.Context, req readAllRequest, 
 
 func (r *readClient) searchLimitOffsetBody(req readAllRequest, limit int, offset int) (io.Reader, error) {
 	filters := []map[string]any{}
-	if req.from != 0 && req.to != 0 {
+	if req.from.IsZero() && req.to.IsZero() {
 		filters = append(filters, map[string]any{
 			"range": map[string]any{
 				"timestamp": map[string]any{
-					"gte":    req.from,
-					"lte":    req.to,
+					"gte":    req.from.UnixMilli(),
+					"lte":    req.to.UnixMilli(),
 					"format": "epoch_millis",
 				},
 			},
