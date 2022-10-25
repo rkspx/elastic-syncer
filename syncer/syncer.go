@@ -6,7 +6,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/elastic/go-elasticsearch/v7/esutil"
 	util "github.com/rkspx/elastic-syncer/elasticsearch-util"
 )
 
@@ -15,6 +14,14 @@ type Config struct {
 	To    time.Time
 	Limit int
 	Index string
+
+	FromHost     string
+	FromUsername string
+	FromPassword string
+
+	ToHost     string
+	ToUsername string
+	ToPassword string
 }
 
 type Client struct {
@@ -22,12 +29,41 @@ type Client struct {
 	toClient   *readWriteClient
 	index      string
 
-	bulkUtil esutil.BulkIndexer
+	from  time.Time
+	to    time.Time
+	limit int
 }
 
 func New(cfg Config) (*Client, error) {
-	// TODO: add implementation
-	panic("not implemented")
+	fromClient, err := newReadClient(readClientConfig{
+		address:  cfg.FromHost,
+		username: cfg.FromUsername,
+		password: cfg.FromPassword,
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to create from client, %s", err.Error())
+	}
+
+	toClient, err := newReadWriteClient(readWriteClientConfig{
+		host:     cfg.ToHost,
+		username: cfg.ToUsername,
+		password: cfg.ToPassword,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create to client, %s", err.Error())
+	}
+
+	cl := &Client{
+		fromClient: fromClient,
+		toClient:   toClient,
+		index:      cfg.Index,
+		from:       cfg.From,
+		to:         cfg.To,
+		limit:      cfg.Limit,
+	}
+
+	return cl, nil
 }
 
 func (c *Client) Sync(ctx context.Context) error {
@@ -60,7 +96,9 @@ func (c *Client) Sync(ctx context.Context) error {
 	}
 
 	req := readAllRequest{
-		// TODO: add request from config
+		from:  c.from,
+		to:    c.to,
+		limit: c.limit,
 	}
 
 	err = c.fromClient.ReadAll(ctx, req, func(doc util.Document) {
