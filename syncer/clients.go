@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"runtime"
@@ -18,6 +19,7 @@ import (
 	"github.com/elastic/go-elasticsearch/v7"
 	"github.com/elastic/go-elasticsearch/v7/estransport"
 	"github.com/elastic/go-elasticsearch/v7/esutil"
+	"golang.org/x/sync/errgroup"
 
 	util "github.com/rkspx/elastic-syncer/elasticsearch-util"
 )
@@ -38,6 +40,15 @@ type readAllRequest struct {
 	to    time.Time
 	limit int
 	index string
+}
+
+func (r readAllRequest) clone(index string) readAllRequest {
+	return readAllRequest{
+		from:  r.from,
+		to:    r.to,
+		limit: r.limit,
+		index: index,
+	}
 }
 
 func (r readAllRequest) validate() error {
@@ -173,14 +184,13 @@ func (r *readClient) closePIT(ctx context.Context, pit string) error {
 	return util.ParseClosePIT(res)
 }
 
-func (r *readClient) searchAll(ctx context.Context, req readAllRequest, pit string) ([]util.Document, error) {
-	body, err := r.searchAllBody(req, pit)
+func (r *readClient) searchAllPIT(ctx context.Context, req readAllRequest, pit string) ([]util.Document, error) {
+	body, err := r.searchAllPITBody(req, pit)
 	if err != nil {
 		return nil, err
 	}
 
 	res, err := r.cl.Search(
-		r.cl.Search.WithIndex(req.index),
 		r.cl.Search.WithBody(body),
 	)
 
@@ -191,7 +201,7 @@ func (r *readClient) searchAll(ctx context.Context, req readAllRequest, pit stri
 	return util.ParseSearch(res)
 }
 
-func (r *readClient) searchAllBody(req readAllRequest, pit string) (io.Reader, error) {
+func (r *readClient) searchAllPITBody(req readAllRequest, pit string) (io.Reader, error) {
 	filters := []map[string]any{}
 	if req.from.IsZero() && req.to.IsZero() {
 		filters = append(filters, map[string]any{
@@ -211,7 +221,7 @@ func (r *readClient) searchAllBody(req readAllRequest, pit string) (io.Reader, e
 				"must": map[string]any{
 					"match_all": map[string]string{},
 				},
-				"filters": filters,
+				"filter": filters,
 			},
 		},
 		"pit": map[string]string{
@@ -232,14 +242,13 @@ func (r *readClient) searchAllBody(req readAllRequest, pit string) (io.Reader, e
 	return bytes.NewReader(b), nil
 }
 
-func (r *readClient) searchAllAfter(ctx context.Context, req readAllRequest, pit string, last util.SortMetadata) ([]util.Document, error) {
-	body, err := r.searchAllAfterBody(req, pit, last)
+func (r *readClient) searchAllAfterPIT(ctx context.Context, req readAllRequest, pit string, last util.SortMetadata) ([]util.Document, error) {
+	body, err := r.searchAllAfterBodyPIT(req, pit, last)
 	if err != nil {
 		return nil, err
 	}
 
 	res, err := r.cl.Search(
-		r.cl.Search.WithIndex(req.index),
 		r.cl.Search.WithBody(body),
 	)
 
@@ -250,7 +259,7 @@ func (r *readClient) searchAllAfter(ctx context.Context, req readAllRequest, pit
 	return util.ParseSearch(res)
 }
 
-func (r *readClient) searchAllAfterBody(req readAllRequest, pit string, last util.SortMetadata) (io.Reader, error) {
+func (r *readClient) searchAllAfterBodyPIT(req readAllRequest, pit string, last util.SortMetadata) (io.Reader, error) {
 	filters := []map[string]any{}
 	if req.from.IsZero() && req.to.IsZero() {
 		filters = append(filters, map[string]any{
@@ -270,14 +279,14 @@ func (r *readClient) searchAllAfterBody(req readAllRequest, pit string, last uti
 				"must": map[string]any{
 					"match_all": map[string]string{},
 				},
-				"filters": filters,
+				"filter": filters,
 			},
 		},
 		"pit": map[string]string{
 			"id":         pit,
 			"keep_alive": pointInTimeKeepAlive,
 		},
-		"search_after": last,
+		"search_after": last.Sort,
 		"sort": []map[string]string{
 			{"timestamp": "desc"},
 			{"_id": "desc"},
@@ -298,7 +307,7 @@ func (r *readClient) readAllPIT(ctx context.Context, req readAllRequest, onRead 
 		return fmt.Errorf("can not create point-in-time, %s", err.Error())
 	}
 
-	docs, err := r.searchAll(ctx, req, pit)
+	docs, err := r.searchAllPIT(ctx, req, pit)
 	count := 0
 	for len(docs) >= 0 {
 		select {
@@ -313,7 +322,7 @@ func (r *readClient) readAllPIT(ctx context.Context, req readAllRequest, onRead 
 		}
 
 		if err != nil {
-			return fmt.Errorf("can not read all, %s", err.Error())
+			return fmt.Errorf("can not read all on index '%s', %s", req.index, err.Error())
 		}
 
 		count = count + len(docs)
@@ -325,7 +334,11 @@ func (r *readClient) readAllPIT(ctx context.Context, req readAllRequest, onRead 
 			}(doc)
 		}
 
-		docs, err = r.searchAllAfter(ctx, req, pit, docs[len(docs)-1].SortMetadata)
+		if len(docs) == 0 {
+			break
+		}
+
+		docs, err = r.searchAllAfterPIT(ctx, req, pit, docs[len(docs)-1].SortMetadata)
 	}
 
 	return nil
@@ -340,6 +353,7 @@ func (r *readClient) readAllPaginate(ctx context.Context, req readAllRequest, on
 			return ctx.Err()
 		default:
 		}
+
 		// return early if limit is reached.
 		if req.limit != 0 && count >= req.limit {
 			return nil
@@ -409,7 +423,7 @@ func (r *readClient) searchLimitOffsetBody(req readAllRequest, limit int, offset
 				"must": map[string]any{
 					"match_all": map[string]string{},
 				},
-				"filters": filters,
+				"filter": filters,
 			},
 		},
 		"sort": []map[string]string{
@@ -446,18 +460,35 @@ func (r *readClient) ReadAll(ctx context.Context, req readAllRequest, onRead fun
 	// If it doesn't, do a simple pagination using from and to search parameter, note that
 	// the result could be inconsistent if a referesh happen during the pagination query.
 
-	ok, err := r.hasTimestamp(ctx, req.index)
+	settings, err := r.ReadIndexSettings(ctx, req.index)
 	if err != nil {
 		return err
 	}
 
-	if ok {
-		return r.readAllPIT(ctx, req, onRead)
+	g := new(errgroup.Group)
+	for _, setting := range settings {
+		req := req.clone(setting.Index)
+		g.Go(func() error {
+			ok, err := r.hasTimestamp(ctx, req.index)
+			if err != nil {
+				return err
+			}
+
+			if ok {
+				log.Printf("reading all using point-in-time from index '%s'\n", req.index)
+				return r.readAllPIT(ctx, req, onRead)
+			}
+
+			log.Printf("reading all using pagination from index '%s'\n", req.index)
+			return r.readAllPaginate(ctx, req, onRead)
+		})
+
 	}
 
-	return r.readAllPaginate(ctx, req, onRead)
+	return g.Wait()
 }
 
+// ErrNoHost is error returned when configuring client with no host specified
 var ErrNoHost = errors.New("no elasticsearch host specified")
 
 var (
@@ -604,21 +635,20 @@ func (c *readWriteClient) CreateIndex(ctx context.Context, setting util.IndexSet
 	return nil
 }
 
-func (c *readWriteClient) WriteDocument(ctx context.Context, doc util.Document, onSuccess func(util.DocumentMetadata), onError func(util.DocumentMetadata, error)) {
+func (c *readWriteClient) WriteDocument(ctx context.Context, doc util.Document, onSuccess func(util.DocumentMetadata), onError func(util.DocumentMetadata, error)) error {
 	select {
 	case <-ctx.Done():
-		return
+		return ctx.Err()
 	default:
 	}
-	meta := doc.DocumentMetadata
-	c.wg.Add(1)
 
+	meta := doc.DocumentMetadata
 	body, err := doc.ToReader()
 	if err != nil {
-		c.wg.Done()
-		onError(meta, err)
+		return err
 	}
 
+	c.wg.Add(1)
 	err = c.bi.Add(ctx, esutil.BulkIndexerItem{
 		Action:     "index",
 		DocumentID: doc.ID,
@@ -635,12 +665,15 @@ func (c *readWriteClient) WriteDocument(ctx context.Context, doc util.Document, 
 	})
 
 	if err != nil {
-		c.wg.Done()
-		onError(meta, err)
+		return err
 	}
+
+	return nil
 }
 
 func (c *readWriteClient) Flush(ctx context.Context) error {
+	c.wg.Add(1)
+	defer c.wg.Done()
 	return c.bi.Close(ctx)
 }
 

@@ -84,17 +84,15 @@ func New(cfg Config) (*Client, error) {
 
 func (c *Client) Sync(ctx context.Context) error {
 	log.Printf("syncing from '%s' to '%s'\n", c.from.Format(time.RFC3339), c.to.Format(time.RFC3339))
-	defer func() {
+
+	go func() {
+		<-ctx.Done()
+		log.Println("context cancelled")
 		flushContext, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := c.toClient.Flush(flushContext); err != nil {
 			log.Printf("failed to flush: %s\n", err)
 		}
-	}()
-
-	go func() {
-		<-ctx.Done()
-		log.Println("context cancelled")
 	}()
 
 	log.Printf("reading index settings for '%s'\n", c.index)
@@ -134,11 +132,12 @@ func (c *Client) Sync(ctx context.Context) error {
 		from:  c.from,
 		to:    c.to,
 		limit: c.limit,
+		index: c.index,
 	}
 
 	err = c.fromClient.ReadAll(ctx, req, func(doc util.Document) {
 		log.Printf("found document '%s/%s'\n", doc.Index, doc.ID)
-		c.toClient.WriteDocument(
+		if err := c.toClient.WriteDocument(
 			ctx,
 			doc,
 			func(doc util.DocumentMetadata) {
@@ -147,7 +146,9 @@ func (c *Client) Sync(ctx context.Context) error {
 			func(doc util.DocumentMetadata, err error) {
 				log.Printf("failed to write document '%s/%s', %s\n", doc.Index, doc.ID, err.Error())
 			},
-		)
+		); err != nil {
+			log.Printf("failed to write document '%s/%s', %s\n", doc.Index, doc.ID, err.Error())
+		}
 	})
 
 	if err != nil {
