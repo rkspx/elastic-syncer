@@ -13,6 +13,10 @@ type Document struct {
 	r *bytes.Reader
 }
 
+func (d Document) Parse(v any) error {
+	return json.Unmarshal(d.Source, v)
+}
+
 type DocumentMetadata struct {
 	Index string `json:"_index"`
 	ID    string `json:"_id"`
