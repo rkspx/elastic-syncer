@@ -15,6 +15,7 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/elastic/go-elasticsearch/v7"
+	"github.com/elastic/go-elasticsearch/v7/estransport"
 	"github.com/elastic/go-elasticsearch/v7/esutil"
 
 	util "github.com/rkspx/elastic-syncer/elasticsearch-util"
@@ -60,9 +61,11 @@ func (r *readAllRequest) setDefaults() {
 }
 
 type readClientConfig struct {
-	address  string
-	username string
-	password string
+	address      string
+	username     string
+	password     string
+	logRequests  bool
+	logResponses bool
 }
 
 func (r readClientConfig) validate() error {
@@ -79,12 +82,21 @@ func newReadClient(cfg readClientConfig) (*readClient, error) {
 		InsecureSkipVerify: true,
 	}
 
-	cl, err := elasticsearch.NewClient(elasticsearch.Config{
+	escfg := elasticsearch.Config{
 		Addresses: []string{cfg.address},
 		Username:  cfg.username,
 		Password:  cfg.password,
 		Transport: tr,
-	})
+	}
+
+	if cfg.logRequests || cfg.logResponses {
+		escfg.Logger = &estransport.TextLogger{
+			EnableRequestBody:  cfg.logRequests,
+			EnableResponseBody: cfg.logResponses,
+		}
+	}
+
+	cl, err := elasticsearch.NewClient(escfg)
 
 	if err != nil {
 		return nil, err
@@ -283,6 +295,12 @@ func (r *readClient) readAllPIT(ctx context.Context, req readAllRequest, onRead 
 	docs, err := r.searchAll(ctx, req, pit)
 	count := 0
 	for len(docs) >= 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		// return early if limit is reached.
 		if req.limit != 0 && count >= req.limit {
 			return nil
@@ -311,6 +329,11 @@ func (r *readClient) readAllPaginate(ctx context.Context, req readAllRequest, on
 	docs, total, err := r.searchLimitOffset(ctx, req, paginateLimit, 0)
 	count, page := 0, 0
 	for len(docs) >= 0 && total != 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		// return early if limit is reached.
 		if req.limit != 0 && count >= req.limit {
 			return nil
@@ -438,9 +461,13 @@ var (
 )
 
 type readWriteClientConfig struct {
-	host          string
-	username      string
-	password      string
+	host     string
+	username string
+	password string
+
+	logRequests  bool
+	logResponses bool
+
 	workerNumber  int
 	flushBytes    float64
 	flushInterval time.Duration
@@ -480,7 +507,8 @@ func newReadWriteClient(cfg readWriteClientConfig) (*readWriteClient, error) {
 	}
 
 	retryBackoff := backoff.NewExponentialBackOff()
-	es, err := elasticsearch.NewClient(elasticsearch.Config{
+
+	escfg := elasticsearch.Config{
 		Addresses:     []string{cfg.host},
 		Username:      cfg.username,
 		Password:      cfg.password,
@@ -494,7 +522,16 @@ func newReadWriteClient(cfg readWriteClientConfig) (*readWriteClient, error) {
 		},
 		MaxRetries: 5,
 		Transport:  tr,
-	})
+	}
+
+	if cfg.logRequests || cfg.logResponses {
+		escfg.Logger = &estransport.TextLogger{
+			EnableRequestBody:  cfg.logRequests,
+			EnableResponseBody: cfg.logResponses,
+		}
+	}
+
+	es, err := elasticsearch.NewClient(escfg)
 
 	if err != nil {
 		return nil, fmt.Errorf("error creating elasticsearch client, %s", err.Error())
@@ -556,6 +593,11 @@ func (c *readWriteClient) CreateIndex(ctx context.Context, setting util.IndexSet
 }
 
 func (c *readWriteClient) WriteDocument(ctx context.Context, doc util.Document, onSuccess func(util.DocumentMetadata), onError func(util.DocumentMetadata, error)) {
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
 	meta := doc.DocumentMetadata
 	c.wg.Add(1)
 

@@ -60,6 +60,16 @@ func sync(cmd *cobra.Command, args []string) {
 		log.Fatalf("can not get 'from-password' value, %v", err)
 	}
 
+	logFromRequests, err := cmd.Flags().GetBool("log-from-requests")
+	if err != nil {
+		log.Fatalf("can not get 'log-from-requests' value, %v", err)
+	}
+
+	logFromResponses, err := cmd.Flags().GetBool("log-from-responses")
+	if err != nil {
+		log.Fatalf("can not get 'log-from-responses' value, %v", err)
+	}
+
 	toAddress, err := cmd.Flags().GetString("to-address")
 	if err != nil {
 		log.Fatalf("can not get 'to-address' value, %v", err)
@@ -75,16 +85,30 @@ func sync(cmd *cobra.Command, args []string) {
 		log.Fatalf("can not get 'to-password' value, %v", err)
 	}
 
+	logToRequests, err := cmd.Flags().GetBool("log-to-requests")
+	if err != nil {
+		log.Fatalf("can not get 'log-to-requests' value, %v", err)
+	}
+
+	logToResponses, err := cmd.Flags().GetBool("log-to-responses")
+	if err != nil {
+		log.Fatalf("can not get 'log-to-responses' value, %v", err)
+	}
+
 	cl, err := syncer.New(syncer.Config{
-		Since:        since,
-		Limit:        limit,
-		Index:        index,
-		FromHost:     fromAddress,
-		FromUsername: fromUsername,
-		FromPassword: fromPassword,
-		ToHost:       toAddress,
-		ToUsername:   toUsername,
-		ToPassword:   toPassword,
+		Since:            since,
+		Limit:            limit,
+		Index:            index,
+		FromHost:         fromAddress,
+		FromUsername:     fromUsername,
+		FromPassword:     fromPassword,
+		LogFromRequests:  logFromRequests,
+		LogFromResponses: logFromResponses,
+		ToHost:           toAddress,
+		ToUsername:       toUsername,
+		ToPassword:       toPassword,
+		LogToRequests:    logToRequests,
+		LogToResponses:   logToResponses,
 	})
 
 	if err != nil {
