@@ -3,6 +3,7 @@ package syncer
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,10 +74,16 @@ func (r readClientConfig) validate() error {
 }
 
 func newReadClient(cfg readClientConfig) (*readClient, error) {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.TLSClientConfig = &tls.Config{
+		InsecureSkipVerify: true,
+	}
+
 	cl, err := elasticsearch.NewClient(elasticsearch.Config{
 		Addresses: []string{cfg.address},
 		Username:  cfg.username,
 		Password:  cfg.password,
+		Transport: tr,
 	})
 
 	if err != nil {
@@ -439,8 +446,8 @@ type readWriteClientConfig struct {
 	flushInterval time.Duration
 }
 
-func (rw *readWriteClientConfig) validate() error {
-	if rw.host != "" {
+func (rw readWriteClientConfig) validate() error {
+	if rw.host == "" {
 		return ErrNoHost
 	}
 
@@ -467,6 +474,11 @@ func newReadWriteClient(cfg readWriteClientConfig) (*readWriteClient, error) {
 		return nil, err
 	}
 
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.TLSClientConfig = &tls.Config{
+		InsecureSkipVerify: true,
+	}
+
 	retryBackoff := backoff.NewExponentialBackOff()
 	es, err := elasticsearch.NewClient(elasticsearch.Config{
 		Addresses:     []string{cfg.host},
@@ -481,6 +493,7 @@ func newReadWriteClient(cfg readWriteClientConfig) (*readWriteClient, error) {
 			return retryBackoff.NextBackOff()
 		},
 		MaxRetries: 5,
+		Transport:  tr,
 	})
 
 	if err != nil {
