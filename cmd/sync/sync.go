@@ -23,9 +23,14 @@ func init() {
 	syncCmd.Flags().String("from-address", "", "source elasticsearch address")
 	syncCmd.Flags().String("from-username", "", "source elasticsearch username, if using basic authentication")
 	syncCmd.Flags().String("from-password", "", "source elasticsearch password, if using basic authentication")
+	syncCmd.Flags().Bool("log-from-requests", false, "log source elasticsearch requests")
+	syncCmd.Flags().Bool("log-from-responses", false, "log source elasticsearch requests")
 	syncCmd.Flags().String("to-address", "", "destination elasticsearch address")
 	syncCmd.Flags().String("to-username", "", "destination elasticsearch username, if using basic authentication")
 	syncCmd.Flags().String("to-password", "", "destination elasticsearch password, if using basic authentication")
+	syncCmd.Flags().Bool("log-to-requests", false, "log destination elasticsearch requests")
+	syncCmd.Flags().Bool("log-to-responses", false, "log destination elasticsearch requests")
+
 	rootCmd.AddCommand(syncCmd)
 }
 

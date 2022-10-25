@@ -3,36 +3,31 @@ package esutil
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 )
 
 type Document struct {
 	DocumentMetadata
 	Source json.RawMessage `json:"_source"`
 	SortMetadata
-
-	r *bytes.Reader
 }
 
 func (d Document) Parse(v any) error {
 	return json.Unmarshal(d.Source, v)
 }
 
+func (d Document) ToReader() (io.Reader, error) {
+	b, err := json.Marshal(d.Source)
+	if err != nil {
+		return nil, err
+	}
+
+	return bytes.NewReader(b), nil
+}
+
 type DocumentMetadata struct {
 	Index string `json:"_index"`
 	ID    string `json:"_id"`
-}
-
-func (d Document) Read(p []byte) (int, error) {
-	if d.r == nil {
-		b, err := json.Marshal(d.Source)
-		if err != nil {
-			return 0, err
-		}
-
-		d.r = bytes.NewReader(b)
-	}
-
-	return d.r.Read(p)
 }
 
 type SortMetadata struct {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"runtime"
 	"sync"
 	"time"
@@ -91,6 +92,7 @@ func newReadClient(cfg readClientConfig) (*readClient, error) {
 
 	if cfg.logRequests || cfg.logResponses {
 		escfg.Logger = &estransport.TextLogger{
+			Output:             os.Stdout,
 			EnableRequestBody:  cfg.logRequests,
 			EnableResponseBody: cfg.logResponses,
 		}
@@ -159,7 +161,11 @@ func (r *readClient) createPIT(ctx context.Context, index string) (string, error
 }
 
 func (r *readClient) closePIT(ctx context.Context, pit string) error {
-	res, err := r.cl.ClosePointInTime(r.cl.ClosePointInTime.WithBody(util.PointInTime{ID: pit}))
+	b, err := util.PointInTime{ID: pit}.Parse()
+	if err != nil {
+		return err
+	}
+	res, err := r.cl.ClosePointInTime(r.cl.ClosePointInTime.WithBody(bytes.NewReader(b)))
 	if err != nil {
 		return err
 	}
@@ -526,6 +532,7 @@ func newReadWriteClient(cfg readWriteClientConfig) (*readWriteClient, error) {
 
 	if cfg.logRequests || cfg.logResponses {
 		escfg.Logger = &estransport.TextLogger{
+			Output:             os.Stdout,
 			EnableRequestBody:  cfg.logRequests,
 			EnableResponseBody: cfg.logResponses,
 		}
@@ -579,7 +586,12 @@ func (c *readWriteClient) IndexExist(ctx context.Context, index string) (bool, e
 }
 
 func (c *readWriteClient) CreateIndex(ctx context.Context, setting util.IndexSetting) error {
-	res, err := c.cl.Indices.Create(setting.Index, c.cl.Indices.Create.WithBody(setting))
+	b, err := setting.Parse()
+	if err != nil {
+		return err
+	}
+
+	res, err := c.cl.Indices.Create(setting.Index, c.cl.Indices.Create.WithBody(bytes.NewReader(b)))
 	if err != nil {
 		return err
 	}
@@ -601,11 +613,17 @@ func (c *readWriteClient) WriteDocument(ctx context.Context, doc util.Document, 
 	meta := doc.DocumentMetadata
 	c.wg.Add(1)
 
-	err := c.bi.Add(ctx, esutil.BulkIndexerItem{
+	body, err := doc.ToReader()
+	if err != nil {
+		c.wg.Done()
+		onError(meta, err)
+	}
+
+	err = c.bi.Add(ctx, esutil.BulkIndexerItem{
 		Action:     "index",
 		DocumentID: doc.ID,
 		Index:      doc.Index,
-		Body:       doc,
+		Body:       body,
 		OnSuccess: func(ctx context.Context, item esutil.BulkIndexerItem, res esutil.BulkIndexerResponseItem) {
 			defer c.wg.Done()
 			onSuccess(meta)

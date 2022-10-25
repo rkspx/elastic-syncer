@@ -1,7 +1,6 @@
 package esutil
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,21 +11,10 @@ import (
 type IndexSetting struct {
 	Index   string
 	Setting SettingInner
-
-	r *bytes.Reader
 }
 
-func (i IndexSetting) Read(p []byte) (int, error) {
-	if i.r == nil {
-		b, err := json.Marshal(i.Setting)
-		if err != nil {
-			return 0, err
-		}
-
-		i.r = bytes.NewReader(b)
-	}
-
-	return i.r.Read(p)
+func (i IndexSetting) Parse() ([]byte, error) {
+	return json.Marshal(i.Setting)
 }
 
 func (i IndexSetting) Replicas() int {
@@ -46,22 +34,26 @@ type SettingInner struct {
 type Aliases = map[string]any
 
 type Mappings struct {
-	Properties map[string]struct {
-		Type   string `json:"type"`
-		Fields struct {
-			Keyword struct {
-				Type        string `json:"keyword"`
-				IgnoreAbove int    `json:"ignore_above"`
-			} `json:"keyword,omitempty"`
-		} `json:"fields"`
-	} `json:"properties"`
+	Properties map[string]MappingProperty `json:"properties"`
+}
+
+type MappingProperty struct {
+	Type   string                              `json:"type"`
+	Fields map[string]MappingPropertyFieldType `json:"fields"`
+}
+
+type MappingPropertyFieldType struct {
+	Type        string `json:"type"`
+	IgnoreAbove int    `json:"ignore_above"`
 }
 
 type Settings struct {
-	Index struct {
-		NumberOfShards   string `json:"number_of_shards"`
-		NumberOfReplicas string `json:"number_of_replicas"`
-	} `json:"index"`
+	Index IndexSettingInner `json:"index"`
+}
+
+type IndexSettingInner struct {
+	NumberOfShards   string `json:"number_of_shards"`
+	NumberOfReplicas string `json:"number_of_replicas"`
 }
 
 func ParseIndicesGetResponse(res *esapi.Response) ([]IndexSetting, error) {
